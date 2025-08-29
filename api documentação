@@ -1,0 +1,406 @@
+# 📋 API de Leads - Navegnet - Documentação Completa
+
+## 🏗️ **Arquitetura da API**
+
+A API de leads da Navegnet é construída em **Next.js 14** com **Prisma ORM** e possui **3 endpoints principais** para diferentes cenários de uso:
+
+---
+
+## 🌐 **Endpoint 1: POST /api/leads (Acesso Normal)**
+
+**Método:** `POST`  
+**Content-Type:** `application/json`  
+**Uso:** Aplicações web, formulários normais
+
+### **Dados Obrigatórios:**
+```json
+{
+  "name": "string",           // Nome completo do usuário
+  "whatsapp": "string",       // Número do WhatsApp
+  "address": "string",        // Endereço completo
+  "city": "string",           // Cidade
+  "partnerId": "string"       // ID do parceiro
+}
+```
+
+### **Dados Opcionais (Verificação Social):**
+```json
+{
+  "verified": "boolean",              // Verificação geral
+  "instagram_verified": "boolean",    // Seguiu no Instagram
+  "google_verified": "boolean",       // Avaliou no Google
+  "social_status": "string",          // Status das ações sociais
+  "actions_completed": "array",       // Lista de ações completadas
+  "social_score": "number",           // Pontuação (0-2)
+  "lead_status": "string",            // Status do lead
+  "completion_percentage": "number",  // Porcentagem de conclusão
+  "social_action_type": "string",     // Tipo de ação social
+  "social_action_status": "string",   // Status da ação social
+  "update_type": "string",            // Tipo de atualização
+  "is_update": "boolean",             // É uma atualização?
+  "lead_identifier": "string",        // Identificador único (WhatsApp)
+  "session_id": "string"              // ID da sessão
+}
+```
+
+---
+
+## 🌐 **Endpoint 2: GET /api/leads (Hotspot Mikrotik)**
+
+**Método:** `GET`  
+**Uso:** Captive portal Mikrotik, fallback quando POST falha  
+**Funcionamento:** Retorna imagem 1x1 transparente (PNG base64)
+
+### **Parâmetros de Query:**
+```
+?name=João&whatsapp=11999999999&address=Rua A&city=SP&partnerId=hotspot-mk&verified=true&instagram_verified=true&google_verified=true
+```
+
+### **Características Especiais:**
+- ✅ **Sempre retorna sucesso** (imagem PNG)
+- ✅ **Cria parceiro automaticamente** se não existir
+- ✅ **Funciona offline** (captive portal)
+- ✅ **Compatível com Mikrotik** (método GET)
+
+---
+
+## 🔄 **Endpoint 3: PATCH /api/leads/[id]/social (Atualização Social)**
+
+**Método:** `PATCH`  
+**Uso:** Atualizar verificações sociais de leads existentes  
+**URL:** `/api/leads/{leadId}/social`
+
+### **Dados Aceitos:**
+```json
+{
+  "action": "instagram|google",       // Ação simples (legado)
+  "instagram_verified": "boolean",    // Seguiu no Instagram
+  "google_verified": "boolean",       // Avaliou no Google
+  "verified": "boolean",              // Verificação geral
+  "social_status": "string",          // Status social
+  "lead_status": "string",            // Status do lead
+  "social_score": "number",           // Pontuação social
+  "completion_percentage": "number"   // Porcentagem de conclusão
+}
+```
+
+---
+
+## 🗄️ **Mapeamento para o Banco de Dados**
+
+### **Tabela: `Lead`**
+
+| Campo Frontend | Campo Banco | Tipo | Descrição |
+|----------------|-------------|------|-----------|
+| `name` | `name` | String | Nome completo |
+| `whatsapp` | `whatsapp` | String | Número WhatsApp |
+| `address` | `address` | String? | Endereço |
+| `city` | `city` | String? | Cidade |
+| `instagram_verified` | `followedInstagram` | Boolean | Seguiu Instagram |
+| `google_verified` | `ratedGoogle` | Boolean | Avaliou Google |
+| `verified` | `completed` | Boolean | Lead completo |
+| `social_status` | `status` | String | Status do lead |
+| `partnerId` | `partnerId` | String | ID do parceiro |
+| `source` | `source` | String | Origem do lead |
+
+### **Campos Automáticos:**
+- `id`: CUID automático
+- `createdAt`: Timestamp de criação
+- `updatedAt`: Timestamp de atualização
+- `ipAddress`: IP do usuário
+- `userAgent`: User agent do navegador
+
+---
+
+## 🔄 **Fluxo de Funcionamento**
+
+### **1. Criação de Lead:**
+```
+Frontend → POST/GET → API → Prisma → Banco → Notificação Admin
+```
+
+### **2. Atualização Social:**
+```
+Frontend → PATCH → API → Prisma → Banco → Lead Atualizado
+```
+
+### **3. Fallback Automático:**
+```
+POST falha → GET fallback → Imagem PNG → Lead criado
+```
+
+---
+
+## 🎯 **Casos de Uso**
+
+### **Cenário A: Formulário Web Normal**
+- **Método:** POST com JSON
+- **Dados:** Completos + verificação social
+- **Resposta:** Lead criado com ID
+
+### **Cenário B: Captive Portal Mikrotik**
+- **Método:** GET com query params
+- **Dados:** Básicos + verificação social
+- **Resposta:** Imagem PNG (sucesso)
+
+### **Cenário C: Atualização de Verificação**
+- **Método:** PATCH para lead existente
+- **Dados:** Apenas campos de verificação
+- **Resposta:** Lead atualizado
+
+---
+
+## 🛡️ **Validações e Segurança**
+
+### **Validações Obrigatórias:**
+- ✅ Nome, WhatsApp, Endereço, Cidade
+- ✅ Parceiro deve existir e estar ativo
+- ✅ WhatsApp único por lead
+
+### **Tratamento de Erros:**
+- ❌ Dados obrigatórios faltando → 400 Bad Request
+- ❌ Parceiro não encontrado → 404 Not Found
+- ❌ Erro interno → 500 Internal Server Error
+
+### **Segurança:**
+- 🔒 Validação de parceiro ativo
+- 🔒 Sanitização de dados de entrada
+- 🔒 Logs detalhados para auditoria
+
+---
+
+## 📊 **Exemplos de Uso**
+
+### **Exemplo 1: Criar Lead Completo**
+```bash
+POST /api/leads
+Content-Type: application/json
+
+{
+  "name": "João Silva",
+  "whatsapp": "11999999999",
+  "address": "Rua das Flores, 123",
+  "city": "São Paulo",
+  "partnerId": "parceiro-123",
+  "instagram_verified": true,
+  "google_verified": true,
+  "verified": true
+}
+```
+
+**Resposta:**
+```json
+{
+  "id": "lead_abc123",
+  "name": "João Silva",
+  "whatsapp": "11999999999",
+  "address": "Rua das Flores, 123",
+  "city": "São Paulo",
+  "partnerId": "parceiro-123",
+  "followedInstagram": true,
+  "ratedGoogle": true,
+  "completed": true,
+  "status": "completed",
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+```
+
+### **Exemplo 2: Atualizar Verificação Social**
+```bash
+PATCH /api/leads/lead-456/social
+Content-Type: application/json
+
+{
+  "instagram_verified": true,
+  "google_verified": false,
+  "social_status": "instagram_completed"
+}
+```
+
+**Resposta:**
+```json
+{
+  "id": "lead-456",
+  "name": "Maria Santos",
+  "followedInstagram": true,
+  "ratedGoogle": false,
+  "status": "instagram_completed",
+  "updatedAt": "2024-01-15T11:00:00Z"
+}
+```
+
+### **Exemplo 3: Hotspot Mikrotik**
+```bash
+GET /api/leads?name=Maria&whatsapp=11888888888&address=Rua B&city=SP&partnerId=hotspot-mk&instagram_verified=true
+```
+
+**Resposta:** Imagem PNG 1x1 transparente (sucesso)
+
+---
+
+## 🔧 **Configuração Técnica**
+
+### **Dependências:**
+- **Next.js 14** - Framework da API
+- **Prisma ORM** - Banco de dados
+- **PostgreSQL** - Banco principal
+- **Node.js** - Runtime
+
+### **Variáveis de Ambiente:**
+```env
+DATABASE_URL="postgresql://usuario:senha@localhost:5432/navegnet"
+NEXTAUTH_SECRET="chave-secreta-jwt"
+NEXTAUTH_URL="https://navegnetparceiros.com.br"
+```
+
+### **Deploy:**
+- **Vercel** - Hospedagem
+- **GitHub** - Versionamento
+- **Prisma** - Migrations automáticas
+
+---
+
+## 📈 **Monitoramento e Logs**
+
+### **Logs Automáticos:**
+- 🚀 Início de cada requisição
+- 📋 Dados recebidos
+- ✅ Sucessos e IDs criados
+- ❌ Erros e stack traces
+- 🔍 Buscas por parceiros
+
+### **Métricas:**
+- Leads criados por fonte
+- Taxa de sucesso por endpoint
+- Tempo de resposta
+- Erros por tipo
+
+---
+
+## 🚀 **Implementação no Banco**
+
+### **1. Estrutura da Tabela Lead:**
+```sql
+CREATE TABLE "Lead" (
+  "id" TEXT NOT NULL,
+  "name" TEXT NOT NULL,
+  "whatsapp" TEXT NOT NULL,
+  "address" TEXT,
+  "city" TEXT,
+  "followedInstagram" BOOLEAN NOT NULL DEFAULT false,
+  "ratedGoogle" BOOLEAN NOT NULL DEFAULT false,
+  "completed" BOOLEAN NOT NULL DEFAULT false,
+  "ipAddress" TEXT,
+  "userAgent" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "partnerId" TEXT NOT NULL,
+  "email" TEXT,
+  "notes" TEXT,
+  "priority" TEXT NOT NULL DEFAULT 'medium',
+  "source" TEXT NOT NULL DEFAULT 'qr_code',
+  "status" TEXT NOT NULL DEFAULT 'new',
+  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  
+  CONSTRAINT "Lead_pkey" PRIMARY KEY ("id")
+);
+```
+
+### **2. Índices Recomendados:**
+```sql
+CREATE INDEX "Lead_whatsapp_idx" ON "Lead"("whatsapp");
+CREATE INDEX "Lead_partnerId_idx" ON "Lead"("partnerId");
+CREATE INDEX "Lead_createdAt_idx" ON "Lead"("createdAt");
+CREATE INDEX "Lead_status_idx" ON "Lead"("status");
+CREATE INDEX "Lead_source_idx" ON "Lead"("source");
+```
+
+### **3. Relacionamentos:**
+```sql
+-- Lead pertence a um Partner
+ALTER TABLE "Lead" ADD CONSTRAINT "Lead_partnerId_fkey" 
+FOREIGN KEY ("partnerId") REFERENCES "Partner"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+```
+
+---
+
+## 🔍 **Testes e Validação**
+
+### **1. Teste de Criação:**
+```bash
+curl -X POST https://navegnetparceiros.com.br/api/leads \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Teste API",
+    "whatsapp": "11977777777",
+    "address": "Rua Teste",
+    "city": "SP",
+    "partnerId": "teste-123"
+  }'
+```
+
+### **2. Teste de Atualização:**
+```bash
+curl -X PATCH https://navegnetparceiros.com.br/api/leads/LEAD_ID/social \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instagram_verified": true
+  }'
+```
+
+### **3. Teste de Hotspot:**
+```bash
+curl "https://navegnetparceiros.com.br/api/leads?name=Teste&whatsapp=11966666666&address=Rua A&city=SP&partnerId=hotspot-mk"
+```
+
+---
+
+## 📝 **Notas de Implementação**
+
+### **1. Compatibilidade:**
+- ✅ **Campos legados** mantidos para compatibilidade
+- ✅ **Fallbacks automáticos** para diferentes cenários
+- ✅ **Múltiplos formatos** de entrada (JSON, Form, Query)
+
+### **2. Performance:**
+- 🚀 **Criação automática** de parceiros
+- 🚀 **Índices otimizados** no banco
+- 🚀 **Logs estruturados** para monitoramento
+
+### **3. Escalabilidade:**
+- 📈 **Suporte a múltiplos** parceiros
+- 📈 **Sistema de notificações** para admins
+- 📈 **Auditoria completa** de todas as operações
+
+---
+
+## 🆘 **Suporte e Contato**
+
+### **Para Dúvidas Técnicas:**
+- 📧 Email: suporte@navegnet.com.br
+- 📱 WhatsApp: (11) 99999-9999
+- 🌐 Site: https://navegnetparceiros.com.br
+
+### **Documentação Adicional:**
+- 📚 Prisma Docs: https://www.prisma.io/docs
+- 📚 Next.js API: https://nextjs.org/docs/api-routes
+- 📚 PostgreSQL: https://www.postgresql.org/docs
+
+---
+
+## 📄 **Versão e Histórico**
+
+**Versão:** 1.0.0  
+**Data:** Janeiro 2024  
+**Autor:** Equipe Navegnet  
+**Última Atualização:** 15/01/2024
+
+### **Changelog:**
+- ✅ **v1.0.0** - Implementação inicial da API
+- ✅ **v1.1.0** - Adição de campos de verificação social
+- ✅ **v1.2.0** - Suporte a hotspot Mikrotik
+- ✅ **v1.3.0** - Endpoint PATCH para atualizações sociais
+
+---
+
+*Esta documentação fornece uma visão completa da API para implementação e manutenção por outros analistas.* 🎯
+
