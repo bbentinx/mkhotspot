@@ -411,8 +411,9 @@ function checkAndSendPendingDataOnLoad() {
                  getUrlParam('source') === 'hotspot_mikrotik';
   
   if (!should) { 
-    // Limpeza abrangente
+    // Limpeza abrangente e reset visual imediato para evitar ficar travado na última tela
     clearAllPendingStates();
+    try { showStep(1); } catch(_) {}
     return; 
   }
   
@@ -478,6 +479,17 @@ async function executeAutomaticDataSend(forceIgnoreCaptive = false) {
   } catch (err) {
     clearTimeout(timeoutId);
     
+    // Tentar fallback via GET (compatível com hotspot) conforme documentação
+    try {
+      const ok = await sendLeadViaGet(data);
+      if (ok) {
+        ['automatic_send_data','automatic_send_configured','data_pending_send','automatic_send_on_return','navegnet_social_actions','instagram_action_data','google_action_data'].forEach(k=> localStorage.removeItem(k));
+        msg('#status4','Dados enviados (fallback). Conexão liberada.','ok');
+        $('#badgeConn').textContent='✅ Conexão liberada';
+        return { fallback: true };
+      }
+    } catch(_) { /* prossegue para salvar pendente */ }
+    
     // Fallback: salvar para tentar de novo depois
     if (raw) { 
       localStorage.setItem('pending_lead_data', raw);
@@ -486,6 +498,24 @@ async function executeAutomaticDataSend(forceIgnoreCaptive = false) {
     
     throw err; // Propagar para retry
   }
+}
+
+// Envio alternativo compatível com hotspot: GET /api/leads com query params (retorna PNG)
+async function sendLeadViaGet(data){
+  const params = new URLSearchParams();
+  params.set('name', data.name || '');
+  params.set('whatsapp', data.whatsapp || '');
+  params.set('address', data.address || '');
+  params.set('city', data.city || '');
+  params.set('partnerId', data.partnerId || PARTNER_SLUG);
+  const ig = data.instagram_verified === true || localStorage.getItem('instagram_verified')==='true';
+  const gg = data.google_verified === true || localStorage.getItem('google_verified')==='true';
+  params.set('instagram_verified', String(ig));
+  params.set('google_verified', String(gg));
+  params.set('verified', String(ig && gg));
+  params.set('source', data.source || 'hotspot_mikrotik');
+  const resp = await fetch(`${API_BASE_URL}/leads?${params.toString()}`, { method: 'GET', mode: 'cors' });
+  return resp && resp.ok;
 }
 
 // ====== CAPTURA SOCIAL (manual + log local) ======
@@ -497,7 +527,16 @@ function captureSocial(action, details={}){
 
 async function safeUpdateSocial(action){
   if(!leadId || leadId.startsWith('hotspot_')|| leadId.startsWith('offline_')|| isInHotspot) return;
-  try{ await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{ method:'PATCH', headers:{'Content-Type':'application/json','Accept':'application/json'}, mode:'cors', body: JSON.stringify({ action }) }) }catch(e){ /* ignora */ }
+  try{ 
+    const ig = localStorage.getItem('instagram_verified')==='true';
+    const gg = localStorage.getItem('google_verified')==='true';
+    await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{ 
+      method:'PATCH', 
+      headers:{'Content-Type':'application/json','Accept':'application/json'}, 
+      mode:'cors', 
+      body: JSON.stringify({ action, instagram_verified: ig, google_verified: gg }) 
+    }) 
+  }catch(e){ /* ignora */ }
 }
 
 // ====== RESUME AUTOMÁTICO APÓS VOLTAR DO INSTAGRAM/GOOGLE ======
