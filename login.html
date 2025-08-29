@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Navegnet — Login Social (Hotspot)</title>
+  <style>
+    :root{--bg:#0b0f14;--card:#121821;--muted:#91a0b5;--brand:#47a3ff;--ok:#10b981;--warn:#f59e0b;--err:#ef4444}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:#e6edf6;font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}
+    .wrap{max-width:920px;margin:40px auto;padding:24px}
+    .card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    h1{font-size:22px;margin:0 0 12px} p{color:var(--muted);margin:0 0 14px}
+    .grid{display:grid;gap:14px}
+    label{font-size:13px;color:#b8c2d6}
+    input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.1);background:#0f141c;color:#e6edf6}
+    button{cursor:pointer;border:0;border-radius:12px;padding:12px 16px;font-weight:600}
+    .btn{background:linear-gradient(135deg,#47a3ff,#1f78ff);color:white}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.12);color:#e6edf6}
+    .btn-ok{background:linear-gradient(135deg,#10b981,#059669);color:white}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .hidden{display:none}
+    .muted{color:var(--muted);font-size:12px}
+    .badge{display:inline-flex;align-items:center;gap:6px;background:#0e1622;border:1px dashed rgba(255,255,255,.15);padding:6px 10px;border-radius:999px;font-size:12px;color:#b8c2d6}
+    .stepper{display:flex;gap:10px;margin:10px 0 18px}
+    .dot{width:10px;height:10px;border-radius:50%;background:#334155;opacity:.5}
+    .dot.active{background:#47a3ff;opacity:1}
+    .status{margin-top:10px;font-size:13px}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Bem‑vindo ao Wi‑Fi da <strong>Navegnet</strong></h1>
+    <p>Complete o passo‑a‑passo. Você pode sair para seguir/avaliar e voltar — o progresso fica salvo.</p>
+
+    <div class="stepper" id="stepper">
+      <div class="dot" data-step="1"></div>
+      <div class="dot" data-step="2"></div>
+      <div class="dot" data-step="3"></div>
+      <div class="dot" data-step="4"></div>
+    </div>
+
+    <!-- STEP 1: Formulário -->
+    <section id="step1" class="grid">
+      <label>Nome
+        <input id="name" autocomplete="name" placeholder="Seu nome" />
+      </label>
+      <label>WhatsApp
+        <input id="whatsapp" inputmode="numeric" placeholder="(xx) xxxxx-xxxx" />
+      </label>
+      <div class="row">
+        <label style="flex:1">Endereço
+          <input id="address" placeholder="Rua, nº" />
+        </label>
+        <label style="flex:1">Cidade
+          <input id="city" placeholder="Cidade" />
+        </label>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnProsseguir">Prosseguir</button>
+        <button class="btn-ghost" id="btnSalvar">Salvar e continuar depois</button>
+      </div>
+      <div class="status" id="status1"></div>
+    </section>
+
+    <!-- STEP 2: Instagram -->
+    <section id="step2" class="grid hidden">
+      <p class="muted">Siga nosso Instagram. Você pode sair e voltar — depois clique em <em>Já segui</em>.</p>
+      <div class="row">
+        <a class="btn" id="btnAbrirInsta" href="#" target="_blank" rel="noopener noreferrer">Abrir Instagram</a>
+        <button class="btn-ok" id="btnJaSegui">✅ Já segui</button>
+      </div>
+      <div class="status" id="status2"></div>
+    </section>
+
+    <!-- STEP 3: Google Review -->
+    <section id="step3" class="grid hidden">
+      <p class="muted">Avalie no Google. Ao voltar, clique em <em>Já avaliei</em> para finalizar.</p>
+      <div class="row">
+        <a class="btn" id="btnAbrirGoogle" href="#" target="_blank" rel="noopener noreferrer">Abrir avaliação</a>
+        <button class="btn-ok" id="btnJaAvaliei">✅ Já avaliei</button>
+      </div>
+      <div class="status" id="status3"></div>
+    </section>
+
+    <!-- STEP 4: Finalização/liberação -->
+    <section id="step4" class="grid hidden">
+      <p class="muted">Concluindo… sua conexão será liberada e os dados enviados.</p>
+      <div class="badge" id="badgeConn">🔒 Aguardando liberação</div>
+      <div class="status" id="status4"></div>
+      <div class="row">
+        <button class="btn-ghost" id="btnRecarregar">Recarregar esta página</button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+// ====== CONFIG ======
+const API_BASE_URL = window.API_BASE_URL || 'https://navegnetparceiros.com.br/api';
+const PARTNER_SLUG  = window.PARTNER_SLUG || 'hotspot-mk';
+const INSTA_URL     = 'https://www.instagram.com/navegnet/'; // URL real do Instagram
+const GOOGLE_REVIEW = 'https://g.page/r/CZGbfiDK2IZgEBM/review'; // já usado por você
+const DEFAULT_LOGIN_FALLBACK = 'http://10.5.50.1/login'; // Mikrotik padrão (altere se necessário)
+
+// Função para limpar localStorage de forma abrangente
+function clearAllPendingStates() {
+  const keysToRemove = [
+    'automatic_send_data', 
+    'automatic_send_timestamp', 
+    'automatic_send_configured', 
+    'data_pending_send', 
+    'automatic_send_on_return', 
+    'navegnet_social_actions', 
+    'instagram_action_data', 
+    'google_action_data', 
+    'pending_lead_data',
+    'instagram_verified', 
+    'google_verified', 
+    'navegnet_current_step'
+  ];
+  
+  keysToRemove.forEach(k => localStorage.removeItem(k));
+}
+
+// ====== ESTADO ======
+let currentStep = 1;
+let leadId = null;
+let isInHotspot = false; // detectado adiante
+
+// ====== UTIL ======
+const $ = sel => document.querySelector(sel);
+function setLoading(b){ document.body.style.pointerEvents = b? 'none':'auto'; document.body.style.opacity = b? .85:1 }
+function showStep(n){ currentStep=n; localStorage.setItem('navegnet_current_step', String(n));
+  ['#step1','#step2','#step3','#step4'].forEach((id,i)=>{ const el=$(id); if(!el) return; (i+1)===n? el.classList.remove('hidden'): el.classList.add('hidden') });
+  document.querySelectorAll('.dot').forEach(dot=>{ dot.classList.toggle('active', Number(dot.dataset.step)<=n) })
+}
+function msg(elId,text,cls=''){ const el=$(elId); if(!el) return; el.innerHTML = text? `<span class="${cls}">${text}</span>` : '' }
+function getUrlParam(k){ const usp = new URLSearchParams(location.search); return usp.get(k) }
+function detectDevice(){ const ua=navigator.userAgent.toLowerCase();
+  const isAndroid=/android/.test(ua), isIOS=/iphone|ipad|ipod/.test(ua); return {device: isAndroid?'Android': isIOS?'iOS':'Desktop'} }
+function saveFormLocal(data){ localStorage.setItem('navegnet_form_data', JSON.stringify(data)) }
+// Modificar restoreSavedState para evitar duplicidade de showStep
+function restoreSavedState(){ 
+  const step = Number(localStorage.getItem('navegnet_current_step')||'1'); 
+  const fdStr = localStorage.getItem('navegnet_form_data'); 
+  const savedLead = localStorage.getItem('navegnet_lead_id');
+  
+  if(fdStr){ 
+    try{ 
+      const f = JSON.parse(fdStr); 
+      ['name','whatsapp','address','city'].forEach(k => { 
+        if(f[k]){ 
+          document.getElementById(k).value = f[k] 
+        } 
+      }); 
+    }catch(e){}
+  }
+  
+  if(savedLead) leadId = savedLead; 
+  
+  // Remover chamada de showStep daqui
+  // showStep será chamado apenas no boot
+}
+
+// ====== DETECÇÃO CAPTIVE ======
+(function detectCaptive(){
+  // Mikrotik normalmente injeta link-login e link-orig na URL
+  const linkLogin = getUrlParam('link-login');
+  const chapId    = getUrlParam('chap-id');
+  const chapChal  = getUrlParam('chap-challenge');
+  isInHotspot = Boolean(linkLogin || chapId || chapChal);
+  console.log('Hotspot?', isInHotspot, {linkLogin, chapId});
+})();
+
+// ====== STEP 1 ======
+$('#btnProsseguir').addEventListener('click', async () => {
+  setLoading(true);
+  try{
+    const formData = {
+      name: $('#name').value.trim(),
+      whatsapp: $('#whatsapp').value.trim(),
+      address: $('#address').value.trim(),
+      city: $('#city').value.trim(),
+      partnerId: PARTNER_SLUG,
+      source: 'hotspot_mikrotik',
+      device: detectDevice().device,
+      timestamp: new Date().toISOString()
+    };
+    saveFormLocal(formData);
+
+    // Validação de WhatsApp
+    const digits = formData.whatsapp.replace(/\D/g,'');
+    if(digits.length < 10){
+      msg('#status1','Informe um WhatsApp válido.','err'); 
+      setLoading(false);
+      return;
+    }
+
+    if(!formData.name || !formData.whatsapp || !formData.address || !formData.city){
+      msg('#status1','Por favor, preencha todos os campos.','err'); return;
+    }
+
+    // Dentro do captive: não tenta API agora; só avança
+    if(isInHotspot){
+      leadId = 'hotspot_'+Date.now();
+      localStorage.setItem('navegnet_lead_id', leadId);
+      showStep(2); msg('#status1','Dados salvos localmente. Continue para as ações.','ok'); return;
+    }
+
+    // Fora do captive: cria lead imediatamente
+    const res = await fetch(`${API_BASE_URL}/leads`,{
+      method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, mode:'cors', body: JSON.stringify(formData)
+    });
+    if(!res.ok){ const err = await safeJson(res); throw new Error(err?.error||`HTTP ${res.status}`) }
+    const lead = await res.json(); leadId = String(lead.id); localStorage.setItem('navegnet_lead_id', leadId);
+    showStep(2); msg('#status1','Lead criado com sucesso.','ok');
+  }catch(e){
+    console.warn('Erro ao criar lead (seguindo offline):', e.message);
+    leadId = 'offline_'+Date.now(); localStorage.setItem('navegnet_lead_id', leadId);
+    showStep(2); msg('#status1','Sem internet: vamos continuar e enviar depois.','warn');
+  }finally{ setLoading(false) }
+});
+
+$('#btnSalvar').addEventListener('click', ()=>{ const f = collectForm(); saveFormLocal(f); msg('#status1','Progresso salvo. Você pode voltar depois.','ok') })
+
+function collectForm(){ return { name: $('#name').value.trim(), whatsapp: $('#whatsapp').value.trim(), address: $('#address').value.trim(), city: $('#city').value.trim(), partnerId: PARTNER_SLUG, source:'hotspot_mikrotik', device: detectDevice().device, timestamp: new Date().toISOString() } }
+
+// ====== STEP 2 — Instagram ======
+$('#btnAbrirInsta').href = INSTA_URL;
+$('#btnAbrirInsta').addEventListener('click', ()=>{
+  localStorage.setItem('instagram_redirected','true');
+  localStorage.setItem('instagram_redirect_time', String(Date.now()));
+  msg('#status2','Abrindo Instagram… volte e clique “Já segui”.','muted')
+});
+$('#btnJaSegui').addEventListener('click', async ()=>{
+  localStorage.setItem('instagram_verified','true');
+  captureSocial('instagram',{ action_type:'confirm_click' });
+  msg('#status2','Obrigado! Vá para a avaliação no Google.','ok');
+  showStep(3);
+  await safeUpdateSocial('instagram');
+});
+
+// ====== STEP 3 — Google Review ======
+$('#btnAbrirGoogle').href = GOOGLE_REVIEW;
+$('#btnAbrirGoogle').addEventListener('click', ()=>{
+  localStorage.setItem('google_redirected','true');
+  localStorage.setItem('google_redirect_time', String(Date.now()));
+  msg('#status3','Abrindo avaliação… volte e clique “Já avaliei”.','muted')
+});
+$('#btnJaAvaliei').addEventListener('click', async ()=>{
+  localStorage.setItem('google_verified','true');
+  captureSocial('google',{ action_type:'confirm_click' });
+  msg('#status3','Obrigado! Finalizando e liberando a internet…','ok');
+  await finalizeAndUnlock();
+});
+
+// ====== FINALIZAÇÃO ======
+async function finalizeAndUnlock(){
+  setLoading(true); showStep(4); msg('#status4','Preparando dados…','muted');
+
+  // 1) Garantir que temos payload salvo para envio automático assim que a internet liberar
+  const saved = saveAllDataForAutomaticSend();
+  if(saved){ msg('#status4','Dados prontos para envio automático.','ok') }
+
+  // 2) Configurar o gatilho para enviar quando a página voltar com internet
+  setupAutomaticDataSendForReturn();
+
+  // 3) Liberar no Mikrotik (usando link-login real)
+  msg('#badgeConn','Redirecionando para liberação…','warn');
+  setTimeout(()=> liberarNoCaptive(), 800);
+}
+
+// ====== EXPIRAÇÃO DE ESTADO PENDENTE ======
+function clearExpiredPendingState() {
+  const EXPIRATION_TIME = 24 * 60 * 60 * 1000; // 24 horas
+  
+  // Verificar dados de envio automático
+  const autoSendData = localStorage.getItem('automatic_send_data');
+  const autoSendTimestamp = localStorage.getItem('automatic_send_timestamp');
+  
+  if (autoSendData && autoSendTimestamp) {
+    const currentTime = Date.now();
+    const savedTime = Number(autoSendTimestamp);
+    
+    if (currentTime - savedTime > EXPIRATION_TIME) {
+      console.warn('Estado de envio automático expirado. Limpando dados.');
+      
+      // Limpar todos os dados relacionados
+      ['automatic_send_data', 'automatic_send_timestamp', 
+       'automatic_send_configured', 'data_pending_send', 
+       'automatic_send_on_return', 'navegnet_social_actions',
+       'instagram_action_data', 'google_action_data', 
+       'pending_lead_data', 'instagram_verified', 
+       'google_verified', 'navegnet_current_step'].forEach(k => {
+        localStorage.removeItem(k);
+      });
+      
+      // Resetar para o primeiro passo
+      showStep(1);
+      msg('#status4', 'Sessão expirada. Por favor, reinicie o processo.', 'warn');
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Modificar função de envio para salvar timestamp
+function saveAutomaticSendData(data) {
+  localStorage.setItem('automatic_send_data', JSON.stringify(data));
+  localStorage.setItem('automatic_send_timestamp', String(Date.now()));
+}
+
+// Modificar saveAllDataForAutomaticSend para usar novo método
+function saveAllDataForAutomaticSend(){
+  // Coleta segura: usa campos, localStorage e fallbacks
+  let fd = collectForm();
+  if(!fd.name || !fd.whatsapp || !fd.address || !fd.city){
+    try{ 
+      const cached = JSON.parse(localStorage.getItem('navegnet_form_data')||'{}'); 
+      fd = {...cached, partnerId:PARTNER_SLUG, source:'hotspot_mikrotik', device: detectDevice().device, timestamp:new Date().toISOString() } 
+    }catch(e){}
+  }
+  if(!fd.name || !fd.whatsapp || !fd.address || !fd.city){ 
+    console.error('Sem dados válidos para envio'); 
+    return false 
+  }
+
+  const socialActions = JSON.parse(localStorage.getItem('navegnet_social_actions')||'[]');
+  const autoData = { ...fd,
+    instagram_verified: localStorage.getItem('instagram_verified')==='true',
+    google_verified:    localStorage.getItem('google_verified')==='true',
+    socialActions
+  };
+  
+  // Usar novo método de salvar com timestamp
+  saveAutomaticSendData(autoData);
+  
+  localStorage.setItem('automatic_send_configured','true');
+  return true;
+}
+
+function setupAutomaticDataSendForReturn(){
+  localStorage.setItem('data_pending_send','true');
+  localStorage.setItem('automatic_send_on_return','true');
+}
+
+function buildReturnUrl(){
+  const url = new URL(location.href);
+  url.searchParams.set('send_pending_data','true');
+  url.searchParams.set('source','hotspot_mikrotik');
+  url.searchParams.delete('link-login'); // evita loops
+  url.searchParams.delete('link-orig');
+  url.searchParams.delete('chap-id');
+  url.searchParams.delete('chap-challenge');
+  return url.toString();
+}
+
+function liberarNoCaptive(){
+  const linkLogin = getUrlParam('link-login');
+  const loginEndpoint = linkLogin || DEFAULT_LOGIN_FALLBACK;
+  const USER='free', PASS='free'; // TODO: se usar outro usuário/perfil, ajuste aqui
+  const dst = buildReturnUrl();
+  const authUrl = `${loginEndpoint}?username=${encodeURIComponent(USER)}&password=${encodeURIComponent(PASS)}&dst=${encodeURIComponent(dst)}`;
+  console.log('Liberando no Mikrotik →', authUrl);
+  location.replace(authUrl);
+}
+
+// ====== ENVIO QUANDO VOLTAR DA LIBERAÇÃO ======
+// Novo: Função de retry com backoff exponencial
+async function retryAutomaticSend(maxRetries = 3, baseDelay = 1000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await executeAutomaticDataSend(true);
+      
+      // Limpeza abrangente no sucesso
+      clearAllPendingStates();
+      
+      msg('#status4', 'Dados enviados com sucesso após tentativas.', 'ok');
+      $('#badgeConn').textContent = '✅ Conexão liberada';
+      
+      // Voltar para o primeiro passo
+      showStep(1);
+      return true;
+    } catch (error) {
+      console.warn(`Tentativa ${attempt} de envio falhou:`, error);
+      
+      // Backoff exponencial
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  // Falha após todas as tentativas
+  msg('#status4', 'Falha persistente no envio. Reinicie o processo.', 'err');
+  return false;
+}
+
+// Modificar checkAndSendPendingDataOnLoad para verificar expiração
+function checkAndSendPendingDataOnLoad() {
+  // Primeiro, limpar estado expirado
+  const wasExpired = clearExpiredPendingState();
+  
+  if (wasExpired) {
+    return; // Estado já foi limpo
+  }
+  
+  const should = getUrlParam('send_pending_data') === 'true' && 
+                 getUrlParam('source') === 'hotspot_mikrotik';
+  
+  if (!should) { 
+    // Limpeza abrangente
+    clearAllPendingStates();
+    return; 
+  }
+  
+  console.log('Página voltou da liberação. Forçando envio automático…');
+  
+  // Usar método de retry
+  setTimeout(() => retryAutomaticSend(), 1200);
+}
+
+// Modificar executeAutomaticDataSend para ser mais robusto
+async function executeAutomaticDataSend(forceIgnoreCaptive = false) {
+  // Remover restrição de hotspot
+  const raw = localStorage.getItem('automatic_send_data') || 
+              localStorage.getItem('pending_lead_data');
+  
+  if (!raw) { 
+    console.warn('Nada para enviar'); 
+    return; 
+  }
+  
+  const data = JSON.parse(raw);
+  
+  // Timeout para evitar bloqueio permanente
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos
+  
+  try {
+    const resp = await fetch(`${API_BASE_URL}/leads`, {
+      method: 'POST', 
+      headers: {'Content-Type': 'application/json'}, 
+      mode: 'cors', 
+      body: JSON.stringify(data),
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!resp.ok) {
+      throw new Error(`Erro no envio: ${resp.status}`);
+    }
+    
+    const created = await resp.json();
+    leadId = String(created.id);
+    localStorage.setItem('navegnet_lead_id', leadId);
+    
+    // PATCH /leads/{id}/social — envia booleans corretos
+    const ig = localStorage.getItem('instagram_verified')==='true';
+    const gg = localStorage.getItem('google_verified')==='true';
+    if(leadId && (!leadId.startsWith('hotspot_') && !leadId.startsWith('offline_'))){
+      try{
+        await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{
+          method:'PATCH', headers:{'Content-Type':'application/json','Accept':'application/json'}, mode:'cors',
+          body: JSON.stringify({ instagram_verified: ig, google_verified: gg })
+        });
+      }catch(e){ console.warn('Falha no PATCH social (prosseguir mesmo assim):', e.message) }
+    }
+
+    // limpeza
+    ['automatic_send_data','automatic_send_configured','data_pending_send','automatic_send_on_return','navegnet_social_actions','instagram_action_data','google_action_data'].forEach(k=> localStorage.removeItem(k));
+    msg('#status4','Dados enviados. Conexão liberada.','ok'); $('#badgeConn').textContent='✅ Conexão liberada';
+    
+    return created;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    
+    // Fallback: salvar para tentar de novo depois
+    if (raw) { 
+      localStorage.setItem('pending_lead_data', raw);
+      msg('#status4', 'Falha no envio. Vamos tentar novamente em seguida.', 'warn');
+    }
+    
+    throw err; // Propagar para retry
+  }
+}
+
+// ====== CAPTURA SOCIAL (manual + log local) ======
+function captureSocial(action, details={}){
+  const payload = { action, timestamp:new Date().toISOString(), device:detectDevice().device, userAgent:navigator.userAgent, details };
+  const arr = JSON.parse(localStorage.getItem('navegnet_social_actions')||'[]'); arr.push(payload);
+  localStorage.setItem('navegnet_social_actions', JSON.stringify(arr));
+}
+
+async function safeUpdateSocial(action){
+  if(!leadId || leadId.startsWith('hotspot_')|| leadId.startsWith('offline_')|| isInHotspot) return;
+  try{ await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{ method:'PATCH', headers:{'Content-Type':'application/json','Accept':'application/json'}, mode:'cors', body: JSON.stringify({ action }) }) }catch(e){ /* ignora */ }
+}
+
+// ====== RESUME AUTOMÁTICO APÓS VOLTAR DO INSTAGRAM/GOOGLE ======
+function handleReturnFromSocial(){
+  // Instagram
+  if(currentStep===2){ const was = localStorage.getItem('instagram_redirected')==='true'; const t= Number(localStorage.getItem('instagram_redirect_time')||0); if(was && (Date.now()-t<5*60*1000)){ $('#btnJaSegui').textContent='✅ Já segui (confirmar)'; localStorage.removeItem('instagram_redirected'); localStorage.removeItem('instagram_redirect_time') } }
+  // Google
+  if(currentStep===3){ const was = localStorage.getItem('google_redirected')==='true'; const t= Number(localStorage.getItem('google_redirect_time')||0); if(was && (Date.now()-t<5*60*1000)){ $('#btnJaAvaliei').textContent='✅ Já avaliei (finalizar)'; localStorage.removeItem('google_redirected'); localStorage.removeItem('google_redirect_time') } }
+}
+['visibilitychange','focus'].forEach(evt=> window.addEventListener(evt, ()=>{ if(!document.hidden) handleReturnFromSocial() }))
+
+// ====== HELPERS ======
+async function safeJson(res){ try{ return await res.json() }catch(_){ return null } }
+
+// ====== MÁSCARA WHATSAPP ======
+$('#whatsapp').addEventListener('input',(e)=>{
+  let v=e.target.value.replace(/\D/g,'');
+  if(v.length>=11) v=v.replace(/(\d{2})(\d{5})(\d{4})/,'($1) $2-$3');
+  else if(v.length>=7) v=v.replace(/(\d{2})(\d{4})(\d{0,4})/,'($1) $2-$3');
+  else if(v.length>=3) v=v.replace(/(\d{2})(\d{0,5})/,'($1) $2');
+  e.target.value=v;
+});
+
+// ====== BOOT ======
+restoreSavedState();
+showStep(Number(localStorage.getItem('navegnet_current_step')||1));
+window.addEventListener('load', ()=> setTimeout(()=>{ handleReturnFromSocial(); if(!isInHotspot) trySendPendingLegacy(); }, 800));
+$('#btnRecarregar').addEventListener('click', ()=> location.reload())
+
+// Envia dados pendentes antigos (legado), fora do captive
+async function trySendPendingLegacy(){
+  if(isInHotspot) return; const pend = localStorage.getItem('pending_lead_data'); if(!pend) return;
+  try{ const data = JSON.parse(pend); const r = await fetch(`${API_BASE_URL}/leads`,{ method:'POST', headers:{'Content-Type':'application/json'}, mode:'cors', body: JSON.stringify(data)}); if(r.ok){ localStorage.removeItem('pending_lead_data'); console.log('Pendentes enviados (legado)') } }catch(_){ }
+}
+if(document.readyState==='complete') checkAndSendPendingDataOnLoad(); else window.addEventListener('load', checkAndSendPendingDataOnLoad);
+</script>
+</body>
+</html>
