@@ -43,6 +43,9 @@
 
     <!-- STEP 1: Formulário -->
     <section id="step1" class="grid">
+      <div class="badge" style="margin-bottom: 10px;">
+        💾 Salvamento automático ativado
+      </div>
       <label>Nome
         <input id="name" autocomplete="name" placeholder="Seu nome" />
       </label>
@@ -59,7 +62,6 @@
       </div>
       <div class="row">
         <button class="btn" id="btnProsseguir">Prosseguir</button>
-        <button class="btn-ghost" id="btnSalvar">Salvar e continuar depois</button>
       </div>
       <div class="status" id="status1"></div>
     </section>
@@ -128,6 +130,7 @@ function clearAllPendingStates() {
 let currentStep = 1;
 let leadId = null;
 let isInHotspot = false; // detectado adiante
+let autoSaveTimeout = null; // Para controlar o debounce do salvamento automático
 
 // ====== UTIL ======
 const $ = sel => document.querySelector(sel);
@@ -178,17 +181,22 @@ function restoreSavedState(){
 $('#btnProsseguir').addEventListener('click', async () => {
   setLoading(true);
   try{
-    const formData = {
-      name: $('#name').value.trim(),
-      whatsapp: $('#whatsapp').value.trim(),
-      address: $('#address').value.trim(),
-      city: $('#city').value.trim(),
-      partnerId: PARTNER_SLUG,
-      source: 'hotspot_mikrotik',
-      device: detectDevice().device,
-      timestamp: new Date().toISOString()
-    };
+    const formData = collectForm();
+    
+    // Garantir que os dados estão salvos
     saveFormLocal(formData);
+    
+    // Preparar dados para envio automático
+    const autoData = {
+      ...formData,
+      instagram_verified: localStorage.getItem('instagram_verified') === 'true',
+      google_verified: localStorage.getItem('google_verified') === 'true',
+      socialActions: JSON.parse(localStorage.getItem('navegnet_social_actions') || '[]')
+    };
+    
+    // Salvar para envio automático
+    saveAutomaticSendData(autoData);
+    localStorage.setItem('automatic_send_configured', 'true');
 
     // Validação de WhatsApp
     const digits = formData.whatsapp.replace(/\D/g,'');
@@ -223,9 +231,86 @@ $('#btnProsseguir').addEventListener('click', async () => {
   }finally{ setLoading(false) }
 });
 
-$('#btnSalvar').addEventListener('click', ()=>{ const f = collectForm(); saveFormLocal(f); msg('#status1','Progresso salvo. Você pode voltar depois.','ok') })
-
 function collectForm(){ return { name: $('#name').value.trim(), whatsapp: $('#whatsapp').value.trim(), address: $('#address').value.trim(), city: $('#city').value.trim(), partnerId: PARTNER_SLUG, source:'hotspot_mikrotik', device: detectDevice().device, timestamp: new Date().toISOString() } }
+
+// ====== SALVAMENTO AUTOMÁTICO ======
+function autoSaveForm() {
+  // Limpar timeout anterior se existir
+  if (autoSaveTimeout) {
+    clearTimeout(autoSaveTimeout);
+  }
+  
+  // Configurar novo timeout com debounce de 1 segundo
+  autoSaveTimeout = setTimeout(() => {
+    const formData = collectForm();
+    saveFormLocal(formData);
+    
+    // Verificar se todos os campos estão preenchidos
+    const allFieldsFilled = formData.name && formData.whatsapp && formData.address && formData.city;
+    
+    if (allFieldsFilled) {
+      // Preparar dados para envio automático
+      const autoData = {
+        ...formData,
+        instagram_verified: localStorage.getItem('instagram_verified') === 'true',
+        google_verified: localStorage.getItem('google_verified') === 'true',
+        socialActions: JSON.parse(localStorage.getItem('navegnet_social_actions') || '[]')
+      };
+      
+      // Salvar para envio automático
+      saveAutomaticSendData(autoData);
+      localStorage.setItem('automatic_send_configured', 'true');
+      
+      // Se não estiver no hotspot, tentar enviar imediatamente
+      if (!isInHotspot) {
+        tryAutoSendData(formData);
+      }
+    }
+    
+    // Mostrar indicador de salvamento
+    const statusEl = $('#status1');
+    if (statusEl) {
+      const previousContent = statusEl.innerHTML;
+      msg('#status1', '💾 Dados salvos automaticamente', 'ok');
+      
+      // Limpar mensagem após 2 segundos
+      setTimeout(() => {
+        // Só limpar se ainda for a mensagem de salvamento
+        if (statusEl.innerHTML.includes('Dados salvos')) {
+          statusEl.innerHTML = '';
+        }
+      }, 2000);
+    }
+    
+    console.log('Dados salvos automaticamente:', formData);
+  }, 1000); // Aguarda 1 segundo após parar de digitar
+}
+
+// Função para tentar enviar dados automaticamente
+async function tryAutoSendData(formData) {
+  // Só tenta enviar se não tiver leadId ainda
+  if (leadId && !leadId.startsWith('offline_') && !leadId.startsWith('hotspot_')) {
+    return; // Já tem lead criado
+  }
+  
+  try {
+    const res = await fetch(`${API_BASE_URL}/leads`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      mode: 'cors',
+      body: JSON.stringify(formData)
+    });
+    
+    if (res.ok) {
+      const lead = await res.json();
+      leadId = String(lead.id);
+      localStorage.setItem('navegnet_lead_id', leadId);
+      console.log('Lead criado automaticamente:', leadId);
+    }
+  } catch (e) {
+    console.log('Erro ao enviar automaticamente (será tentado depois):', e.message);
+  }
+}
 
 // ====== STEP 2 — Instagram ======
 $('#btnAbrirInsta').href = INSTA_URL;
@@ -526,6 +611,18 @@ restoreSavedState();
 showStep(Number(localStorage.getItem('navegnet_current_step')||1));
 window.addEventListener('load', ()=> setTimeout(()=>{ handleReturnFromSocial(); if(!isInHotspot) trySendPendingLegacy(); }, 800));
 $('#btnRecarregar').addEventListener('click', ()=> location.reload())
+
+// ====== CONFIGURAR SALVAMENTO AUTOMÁTICO ======
+// Adicionar listeners para todos os campos do formulário
+['name', 'whatsapp', 'address', 'city'].forEach(fieldId => {
+  const field = $('#' + fieldId);
+  if (field) {
+    // Salvar automaticamente ao digitar
+    field.addEventListener('input', autoSaveForm);
+    // Também salvar ao sair do campo
+    field.addEventListener('blur', autoSaveForm);
+  }
+});
 
 // Envia dados pendentes antigos (legado), fora do captive
 async function trySendPendingLegacy(){
