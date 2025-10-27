@@ -106,6 +106,20 @@ const INSTA_URL     = 'https://www.instagram.com/navegnet/'; // URL real do Inst
 const GOOGLE_REVIEW = 'https://g.page/r/CZGbfiDK2IZgEBM/review'; // já usado por você
 const DEFAULT_LOGIN_FALLBACK = 'http://10.5.50.1/login'; // Mikrotik padrão (altere se necessário)
 
+// Função para detectar nova conexão
+function isNewConnection() {
+  const lastConnectionTime = localStorage.getItem('last_connection_time');
+  const currentTime = Date.now();
+  const CONNECTION_TIMEOUT = 5 * 60 * 1000; // 5 minutos
+  
+  if (!lastConnectionTime) {
+    return true;
+  }
+  
+  const timeDiff = currentTime - Number(lastConnectionTime);
+  return timeDiff > CONNECTION_TIMEOUT;
+}
+
 // Função para limpar localStorage de forma abrangente
 function clearAllPendingStates() {
   const keysToRemove = [
@@ -120,10 +134,35 @@ function clearAllPendingStates() {
     'pending_lead_data',
     'instagram_verified', 
     'google_verified', 
-    'navegnet_current_step'
+    'navegnet_current_step',
+    'navegnet_form_data',
+    'navegnet_lead_id',
+    'instagram_redirected',
+    'instagram_redirect_time',
+    'google_redirected',
+    'google_redirect_time'
   ];
   
   keysToRemove.forEach(k => localStorage.removeItem(k));
+  
+  // Limpar campos do formulário
+  ['#name', '#whatsapp', '#address', '#city'].forEach(id => {
+    const el = $(id);
+    if (el) el.value = '';
+  });
+}
+
+// Função para resetar completamente o estado
+function resetCompleteState() {
+  clearAllPendingStates();
+  currentStep = 1;
+  leadId = null;
+  showStep(1);
+  msg('#status1', '', '');
+  msg('#status2', '', '');
+  msg('#status3', '', '');
+  msg('#status4', '', '');
+  $('#badgeConn').textContent = '🔒 Aguardando liberação';
 }
 
 // ====== ESTADO ======
@@ -210,11 +249,24 @@ $('#btnProsseguir').addEventListener('click', async () => {
       msg('#status1','Por favor, preencha todos os campos.','err'); return;
     }
 
-    // Dentro do captive: não tenta API agora; só avança
+    // Dentro do captive: salva dados para envio posterior
     if(isInHotspot){
       leadId = 'hotspot_'+Date.now();
       localStorage.setItem('navegnet_lead_id', leadId);
-      showStep(2); msg('#status1','Dados salvos localmente. Continue para as ações.','ok'); return;
+      
+      // Salvar dados para envio posterior
+      const pendingData = {
+        ...formData,
+        instagram_verified: false,
+        google_verified: false,
+        verified: false
+      };
+      localStorage.setItem('pending_lead_data', JSON.stringify(pendingData));
+      
+      showStep(2); 
+      msg('#status1','Dados salvos localmente. Continue para as ações.','ok'); 
+      setLoading(false);
+      return;
     }
 
     // Fora do captive: cria lead imediatamente
@@ -320,11 +372,29 @@ $('#btnAbrirInsta').addEventListener('click', ()=>{
   msg('#status2','Abrindo Instagram… volte e clique “Já segui”.','muted')
 });
 $('#btnJaSegui').addEventListener('click', async ()=>{
-  localStorage.setItem('instagram_verified','true');
-  captureSocial('instagram',{ action_type:'confirm_click' });
-  msg('#status2','Obrigado! Vá para a avaliação no Google.','ok');
-  showStep(3);
-  await safeUpdateSocial('instagram');
+  setLoading(true);
+  try {
+    localStorage.setItem('instagram_verified','true');
+    captureSocial('instagram',{ action_type:'confirm_click' });
+    
+    // Atualizar dados pendentes com verificação do Instagram
+    const pendingDataStr = localStorage.getItem('pending_lead_data');
+    if (pendingDataStr) {
+      const pendingData = JSON.parse(pendingDataStr);
+      pendingData.instagram_verified = true;
+      localStorage.setItem('pending_lead_data', JSON.stringify(pendingData));
+    }
+    
+    msg('#status2','✅ Instagram verificado! Prossiga para a avaliação no Google.','ok');
+    showStep(3);
+    
+    // Tentar atualizar via API se não estiver no hotspot
+    if (!isInHotspot && leadId && !leadId.startsWith('hotspot_')) {
+      await safeUpdateSocial('instagram');
+    }
+  } finally {
+    setLoading(false);
+  }
 });
 
 // ====== STEP 3 — Google Review ======
@@ -335,10 +405,31 @@ $('#btnAbrirGoogle').addEventListener('click', ()=>{
   msg('#status3','Abrindo avaliação… volte e clique “Já avaliei”.','muted')
 });
 $('#btnJaAvaliei').addEventListener('click', async ()=>{
-  localStorage.setItem('google_verified','true');
-  captureSocial('google',{ action_type:'confirm_click' });
-  msg('#status3','Obrigado! Finalizando e liberando a internet…','ok');
-  await finalizeAndUnlock();
+  setLoading(true);
+  try {
+    localStorage.setItem('google_verified','true');
+    captureSocial('google',{ action_type:'confirm_click' });
+    
+    // Atualizar dados pendentes com verificação do Google
+    const pendingDataStr = localStorage.getItem('pending_lead_data');
+    if (pendingDataStr) {
+      const pendingData = JSON.parse(pendingDataStr);
+      pendingData.google_verified = true;
+      pendingData.verified = true; // Marcar como completo
+      localStorage.setItem('pending_lead_data', JSON.stringify(pendingData));
+    }
+    
+    msg('#status3','✅ Google verificado! Finalizando e liberando a internet…','ok');
+    
+    // Tentar atualizar via API se não estiver no hotspot
+    if (!isInHotspot && leadId && !leadId.startsWith('hotspot_')) {
+      await safeUpdateSocial('google');
+    }
+    
+    await finalizeAndUnlock();
+  } finally {
+    setLoading(false);
+  }
 });
 
 // ====== FINALIZAÇÃO ======
@@ -454,32 +545,51 @@ function liberarNoCaptive(){
 }
 
 // ====== ENVIO QUANDO VOLTAR DA LIBERAÇÃO ======
-// Novo: Função de retry com backoff exponencial
+// Função de retry com backoff exponencial
 async function retryAutomaticSend(maxRetries = 3, baseDelay = 1000) {
+  // Mostrar status de tentativa
+  showStep(4);
+  msg('#status4', 'Verificando conexão e enviando dados...', 'muted');
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      await executeAutomaticDataSend(true);
+      msg('#status4', `Tentativa ${attempt} de ${maxRetries}...`, 'muted');
       
-      // Limpeza abrangente no sucesso
-      clearAllPendingStates();
+      const result = await executeAutomaticDataSend(true);
       
-      msg('#status4', 'Dados enviados com sucesso após tentativas.', 'ok');
+      // Sucesso!
+      msg('#status4', '✅ Dados enviados com sucesso!', 'ok');
       $('#badgeConn').textContent = '✅ Conexão liberada';
       
-      // Voltar para o primeiro passo
-      showStep(1);
+      // Aguardar um pouco antes de resetar
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Resetar completamente para novo usuário
+      resetCompleteState();
+      msg('#status1', 'Sistema pronto para novo cadastro', 'ok');
+      
       return true;
     } catch (error) {
       console.warn(`Tentativa ${attempt} de envio falhou:`, error);
       
-      // Backoff exponencial
-      const delay = baseDelay * Math.pow(2, attempt);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      if (attempt < maxRetries) {
+        // Backoff exponencial
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        msg('#status4', `Tentativa ${attempt} falhou. Aguardando ${delay/1000}s para próxima tentativa...`, 'warn');
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
   }
   
   // Falha após todas as tentativas
-  msg('#status4', 'Falha persistente no envio. Reinicie o processo.', 'err');
+  msg('#status4', '❌ Falha no envio após múltiplas tentativas.', 'err');
+  $('#badgeConn').textContent = '❌ Erro no envio';
+  
+  // Oferecer opção de tentar novamente
+  setTimeout(() => {
+    msg('#status4', 'Clique em "Recarregar" para tentar novamente.', 'warn');
+  }, 2000);
+  
   return false;
 }
 
@@ -496,8 +606,17 @@ function checkAndSendPendingDataOnLoad() {
                  getUrlParam('source') === 'hotspot_mikrotik';
   
   if (!should) { 
-    // Limpeza abrangente
-    clearAllPendingStates();
+    // Verificar se há dados pendentes mesmo sem parâmetros na URL
+    const hasPendingData = localStorage.getItem('automatic_send_data') || 
+                          localStorage.getItem('pending_lead_data');
+    
+    if (!hasPendingData) {
+      return;
+    }
+    
+    // Se há dados pendentes mas não é a URL de retorno, tentar enviar mesmo assim
+    console.log('Dados pendentes encontrados. Tentando enviar...');
+    setTimeout(() => retryAutomaticSend(), 2000);
     return; 
   }
   
@@ -509,16 +628,40 @@ function checkAndSendPendingDataOnLoad() {
 
 // Modificar executeAutomaticDataSend para ser mais robusto
 async function executeAutomaticDataSend(forceIgnoreCaptive = false) {
-  // Remover restrição de hotspot
-  const raw = localStorage.getItem('automatic_send_data') || 
-              localStorage.getItem('pending_lead_data');
+  // Priorizar automatic_send_data, depois pending_lead_data
+  let raw = localStorage.getItem('automatic_send_data');
+  let isPendingData = false;
+  
+  if (!raw) {
+    raw = localStorage.getItem('pending_lead_data');
+    isPendingData = true;
+  }
   
   if (!raw) { 
     console.warn('Nada para enviar'); 
     return; 
   }
   
-  const data = JSON.parse(raw);
+  let data = JSON.parse(raw);
+  
+  // Garantir que os campos de verificação estejam presentes
+  if (!data.hasOwnProperty('instagram_verified')) {
+    data.instagram_verified = localStorage.getItem('instagram_verified') === 'true';
+  }
+  if (!data.hasOwnProperty('google_verified')) {
+    data.google_verified = localStorage.getItem('google_verified') === 'true';
+  }
+  if (!data.hasOwnProperty('verified')) {
+    data.verified = data.instagram_verified && data.google_verified;
+  }
+  
+  // Adicionar campos obrigatórios se não existirem
+  if (!data.partnerId) data.partnerId = PARTNER_SLUG;
+  if (!data.source) data.source = 'hotspot_mikrotik';
+  if (!data.device) data.device = detectDevice().device;
+  if (!data.timestamp) data.timestamp = new Date().toISOString();
+  
+  console.log('Enviando dados para API:', data);
   
   // Timeout para evitar bloqueio permanente
   const controller = new AbortController();
@@ -544,20 +687,43 @@ async function executeAutomaticDataSend(forceIgnoreCaptive = false) {
     localStorage.setItem('navegnet_lead_id', leadId);
     
     // PATCH /leads/{id}/social — envia booleans corretos
-    const ig = localStorage.getItem('instagram_verified')==='true';
-    const gg = localStorage.getItem('google_verified')==='true';
+    const ig = data.instagram_verified || localStorage.getItem('instagram_verified')==='true';
+    const gg = data.google_verified || localStorage.getItem('google_verified')==='true';
+    
     if(leadId && (!leadId.startsWith('hotspot_') && !leadId.startsWith('offline_'))){
       try{
-        await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{
-          method:'PATCH', headers:{'Content-Type':'application/json','Accept':'application/json'}, mode:'cors',
-          body: JSON.stringify({ instagram_verified: ig, google_verified: gg })
+        const patchResponse = await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{
+          method:'PATCH', 
+          headers:{'Content-Type':'application/json','Accept':'application/json'}, 
+          mode:'cors',
+          body: JSON.stringify({ 
+            instagram_verified: ig, 
+            google_verified: gg,
+            verified: ig && gg,
+            social_status: ig && gg ? 'completed' : (ig ? 'instagram_completed' : (gg ? 'google_completed' : 'pending')),
+            completion_percentage: (ig && gg) ? 100 : (ig || gg ? 50 : 0)
+          })
         });
-      }catch(e){ console.warn('Falha no PATCH social (prosseguir mesmo assim):', e.message) }
+        
+        if (patchResponse.ok) {
+          console.log('Verificações sociais atualizadas com sucesso');
+        }
+      }catch(e){ 
+        console.warn('Falha no PATCH social (prosseguir mesmo assim):', e.message) 
+      }
     }
 
-    // limpeza
-    ['automatic_send_data','automatic_send_configured','data_pending_send','automatic_send_on_return','navegnet_social_actions','instagram_action_data','google_action_data'].forEach(k=> localStorage.removeItem(k));
-    msg('#status4','Dados enviados. Conexão liberada.','ok'); $('#badgeConn').textContent='✅ Conexão liberada';
+    // Limpeza completa após sucesso
+    clearAllPendingStates();
+    
+    msg('#status4','✅ Dados enviados com sucesso! Conexão liberada.','ok'); 
+    $('#badgeConn').textContent='✅ Conexão liberada';
+    
+    // Resetar para novo usuário após 3 segundos
+    setTimeout(() => {
+      resetCompleteState();
+      msg('#status1', 'Pronto para novo cadastro', 'ok');
+    }, 3000);
     
     return created;
   } catch (err) {
@@ -582,7 +748,34 @@ function captureSocial(action, details={}){
 
 async function safeUpdateSocial(action){
   if(!leadId || leadId.startsWith('hotspot_')|| leadId.startsWith('offline_')|| isInHotspot) return;
-  try{ await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{ method:'PATCH', headers:{'Content-Type':'application/json','Accept':'application/json'}, mode:'cors', body: JSON.stringify({ action }) }) }catch(e){ /* ignora */ }
+  
+  try{ 
+    const updateData = {
+      action,
+      [`${action}_verified`]: true
+    };
+    
+    // Adicionar status baseado na ação
+    if (action === 'instagram') {
+      updateData.social_status = 'instagram_completed';
+    } else if (action === 'google') {
+      updateData.social_status = 'google_completed';
+      updateData.verified = true;
+    }
+    
+    const response = await fetch(`${API_BASE_URL}/leads/${leadId}/social`,{ 
+      method:'PATCH', 
+      headers:{'Content-Type':'application/json','Accept':'application/json'}, 
+      mode:'cors', 
+      body: JSON.stringify(updateData) 
+    });
+    
+    if (response.ok) {
+      console.log(`Ação ${action} atualizada com sucesso`);
+    }
+  }catch(e){ 
+    console.warn(`Erro ao atualizar ação ${action}:`, e.message);
+  }
 }
 
 // ====== RESUME AUTOMÁTICO APÓS VOLTAR DO INSTAGRAM/GOOGLE ======
@@ -607,10 +800,27 @@ $('#whatsapp').addEventListener('input',(e)=>{
 });
 
 // ====== BOOT ======
-restoreSavedState();
-showStep(Number(localStorage.getItem('navegnet_current_step')||1));
-window.addEventListener('load', ()=> setTimeout(()=>{ handleReturnFromSocial(); if(!isInHotspot) trySendPendingLegacy(); }, 800));
-$('#btnRecarregar').addEventListener('click', ()=> location.reload())
+// Verificar se é uma nova conexão e limpar estado se necessário
+if (isNewConnection()) {
+  console.log('Nova conexão detectada. Limpando estado anterior...');
+  resetCompleteState();
+  localStorage.setItem('last_connection_time', String(Date.now()));
+} else {
+  restoreSavedState();
+  showStep(Number(localStorage.getItem('navegnet_current_step')||1));
+}
+
+window.addEventListener('load', ()=> setTimeout(()=>{ 
+  handleReturnFromSocial(); 
+  if(!isInHotspot) trySendPendingLegacy(); 
+  // Atualizar timestamp de conexão
+  localStorage.setItem('last_connection_time', String(Date.now()));
+}, 800));
+
+$('#btnRecarregar').addEventListener('click', ()=> {
+  resetCompleteState();
+  location.reload();
+})
 
 // ====== CONFIGURAR SALVAMENTO AUTOMÁTICO ======
 // Adicionar listeners para todos os campos do formulário
